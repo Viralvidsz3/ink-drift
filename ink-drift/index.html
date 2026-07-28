@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ink Drift</title>
+<style>
+  :root {
+    --bg: #07080c;
+    --panel: rgba(20, 22, 30, 0.85);
+    --text: #e8e8ee;
+    --accent: #7dd3fc;
+    --muted: #8a8fa3;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+  #panel {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    background: var(--panel);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 16px 18px;
+    width: 240px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    transition: transform 0.25s ease, opacity 0.25s ease;
+  }
+  #panel.collapsed {
+    transform: translateX(-260px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  #panel h1 {
+    font-size: 15px;
+    margin: 0 0 2px 0;
+    letter-spacing: 0.3px;
+  }
+  #panel .sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 0 0 14px 0;
+  }
+  .row {
+    margin-bottom: 12px;
+  }
+  .row label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .row label span.val {
+    color: var(--text);
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .palettes {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .swatch {
+    flex: 1;
+    height: 26px;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    cursor: pointer;
+  }
+  .swatch.active {
+    border-color: var(--text);
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  button {
+    flex: 1;
+    background: rgba(255,255,255,0.08);
+    color: var(--text);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button:hover {
+    background: rgba(255,255,255,0.16);
+  }
+  #toggleBtn {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: var(--panel);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 5;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #toggleBtn.show {
+    display: flex;
+  }
+  #hint {
+    position: fixed;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--panel);
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.08);
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 1.5s ease;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="canvas"></canvas>
+</div>
+
+<button id="toggleBtn" title="Show controls">☰</button>
+
+<div id="panel">
+  <h1>Ink Drift</h1>
+  <p class="sub">drag to paint · click for a burst</p>
+
+  <div class="row">
+    <label>Flow strength <span class="val" id="flowVal"></span></label>
+    <input type="range" id="flow" min="0" max="100" value="35">
+  </div>
+  <div class="row">
+    <label>Speed <span class="val" id="speedVal"></span></label>
+    <input type="range" id="speed" min="10" max="200" value="70">
+  </div>
+  <div class="row">
+    <label>Trail length <span class="val" id="trailVal"></span></label>
+    <input type="range" id="trail" min="1" max="20" value="8">
+  </div>
+  <div class="row">
+    <label>Brush size <span class="val" id="brushVal"></span></label>
+    <input type="range" id="brush" min="1" max="12" value="4">
+  </div>
+  <div class="row">
+    <label>Density <span class="val" id="densityVal"></span></label>
+    <input type="range" id="density" min="1" max="10" value="4">
+  </div>
+
+  <div class="palettes" id="palettes"></div>
+
+  <div class="buttons">
+    <button id="clearBtn">Clear</button>
+    <button id="saveBtn">Export PNG</button>
+  </div>
+  <div class="buttons" style="margin-top:8px;">
+    <button id="hideBtn">Hide panel</button>
+  </div>
+</div>
+
+<div id="hint">click + drag anywhere to draw</div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let width, height, dpr;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ---- value noise for the flow field ----
+  const NOISE_SIZE = 256;
+  const noiseGrid = new Float32Array(NOISE_SIZE * NOISE_SIZE);
+  for (let i = 0; i < noiseGrid.length; i++) noiseGrid[i] = Math.random();
+
+  function noiseAt(x, y) {
+    x = ((x % NOISE_SIZE) + NOISE_SIZE) % NOISE_SIZE;
+    y = ((y % NOISE_SIZE) + NOISE_SIZE) % NOISE_SIZE;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = (x0 + 1) % NOISE_SIZE, y1 = (y0 + 1) % NOISE_SIZE;
+    const sx = x - x0, sy = y - y0;
+    const n00 = noiseGrid[y0 * NOISE_SIZE + x0];
+    const n10 = noiseGrid[y0 * NOISE_SIZE + x1];
+    const n01 = noiseGrid[y1 * NOISE_SIZE + x0];
+    const n11 = noiseGrid[y1 * NOISE_SIZE + x1];
+    const ix0 = n00 + (n10 - n00) * sx;
+    const ix1 = n01 + (n11 - n01) * sx;
+    return ix0 + (ix1 - ix0) * sy;
+  }
+
+  function flowAngle(px, py, t) {
+    const scale = 0.006;
+    const n = noiseAt(px * scale + t, py * scale - t * 0.6);
+    return n * Math.PI * 4;
+  }
+
+  // ---- palettes ----
+  const palettes = [
+    { name: 'Aurora', hues: [190, 260, 320] },
+    { name: 'Ember', hues: [10, 35, 50] },
+    { name: 'Mint', hues: [140, 170, 200] },
+    { name: 'Mono', hues: [0], mono: true },
+  ];
+  let activePalette = 0;
+
+  const palettesEl = document.getElementById('palettes');
+  palettes.forEach((p, i) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (i === 0 ? ' active' : '');
+    sw.style.background = p.mono
+      ? 'linear-gradient(90deg,#666,#eee)'
+      : `linear-gradient(90deg, hsl(${p.hues[0]},80%,60%), hsl(${p.hues[1]||p.hues[0]},80%,60%), hsl(${p.hues[2]||p.hues[0]},80%,60%))`;
+    sw.title = p.name;
+    sw.addEventListener('click', () => {
+      activePalette = i;
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+    });
+    palettesEl.appendChild(sw);
+  });
+
+  function pickHue() {
+    const p = palettes[activePalette];
+    if (p.mono) return 0;
+    const h = p.hues[Math.floor(Math.random() * p.hues.length)];
+    return h + (Math.random() * 16 - 8);
+  }
+
+  // ---- controls ----
+  const els = {
+    flow: document.getElementById('flow'),
+    speed: document.getElementById('speed'),
+    trail: document.getElementById('trail'),
+    brush: document.getElementById('brush'),
+    density: document.getElementById('density'),
+  };
+  const vals = {
+    flow: document.getElementById('flowVal'),
+    speed: document.getElementById('speedVal'),
+    trail: document.getElementById('trailVal'),
+    brush: document.getElementById('brushVal'),
+    density: document.getElementById('densityVal'),
+  };
+  function syncVals() {
+    for (const k in els) vals[k].textContent = els[k].value;
+  }
+  for (const k in els) els[k].addEventListener('input', syncVals);
+  syncVals();
+
+  // ---- particles ----
+  const particles = [];
+  const MAX_PARTICLES = 4000;
+
+  function spawn(x, y, vx0, vy0, hue) {
+    if (particles.length > MAX_PARTICLES) particles.splice(0, 200);
+    particles.push({
+      x, y,
+      px: x, py: y,
+      vx: vx0, vy: vy0,
+      life: 0,
+      maxLife: 60 + Math.random() * 120,
+      hue: hue !== undefined ? hue : pickHue(),
+    });
+  }
+
+  // ---- pointer handling ----
+  const pointer = { x: -1000, y: -1000, px: -1000, py: -1000, down: false, vx: 0, vy: 0 };
+
+  function setPointer(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    pointer.px = pointer.x;
+    pointer.py = pointer.y;
+    pointer.x = clientX - rect.left;
+    pointer.y = clientY - rect.top;
+    pointer.vx = pointer.x - pointer.px;
+    pointer.vy = pointer.y - pointer.py;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    pointer.down = true;
+    setPointer(e.clientX, e.clientY);
+    pointer.vx = 0; pointer.vy = 0;
+    burst(pointer.x, pointer.y);
+    hideHint();
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!pointer.down) return;
+    setPointer(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointerup', () => { pointer.down = false; });
+
+  function burst(x, y) {
+    const n = 30;
+    for (let i = 0; i < n; i++) {
+      const a = (Math.PI * 2 * i) / n + Math.random() * 0.3;
+      const spd = 0.5 + Math.random() * 1.5;
+      spawn(x, y, Math.cos(a) * spd, Math.sin(a) * spd);
+    }
+  }
+
+  function hideHint() {
+    const hint = document.getElementById('hint');
+    hint.style.opacity = '0';
+  }
+
+  // ---- draw loop ----
+  let t = 0;
+  function frame() {
+    t += 0.0016;
+
+    const trail = +els.trail.value;
+    const fadeAlpha = 0.16 - (trail / 20) * 0.14; // more trail => less fade
+    ctx.fillStyle = `rgba(7,8,12,${fadeAlpha})`;
+    ctx.fillRect(0, 0, width, height);
+
+    const flowStrength = (+els.flow.value) / 1000;
+    const speed = (+els.speed.value) / 100;
+    const brush = +els.brush.value;
+    const density = +els.density.value;
+
+    if (pointer.down) {
+      for (let i = 0; i < density; i++) {
+        const jitterX = (Math.random() - 0.5) * brush * 2;
+        const jitterY = (Math.random() - 0.5) * brush * 2;
+        spawn(
+          pointer.x + jitterX,
+          pointer.y + jitterY,
+          pointer.vx * 0.15 + (Math.random() - 0.5) * 0.4,
+          pointer.vy * 0.15 + (Math.random() - 0.5) * 0.4
+        );
+      }
+    }
+
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      const angle = flowAngle(p.x, p.y, t);
+      p.vx += Math.cos(angle) * flowStrength;
+      p.vy += Math.sin(angle) * flowStrength;
+      p.vx *= 0.985;
+      p.vy *= 0.985;
+
+      p.px = p.x;
+      p.py = p.y;
+      p.x += p.vx * speed;
+      p.y += p.vy * speed;
+      p.life++;
+
+      const lifeRatio = 1 - p.life / p.maxLife;
+      if (lifeRatio <= 0 || p.x < -50 || p.x > width + 50 || p.y < -50 || p.y > height + 50) {
+        particles.splice(i, 1);
+        continue;
+      }
+
+      const alpha = Math.max(0, lifeRatio) * 0.9;
+      const lightness = palettes[activePalette].mono ? 40 + lifeRatio * 50 : 55 + lifeRatio * 20;
+      ctx.strokeStyle = palettes[activePalette].mono
+        ? `hsla(0,0%,${lightness}%,${alpha})`
+        : `hsla(${p.hue},85%,${lightness}%,${alpha})`;
+      ctx.lineWidth = 1 + lifeRatio * 1.8;
+      ctx.beginPath();
+      ctx.moveTo(p.px, p.py);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(frame);
+  }
+
+  ctx.fillStyle = '#07080c';
+  ctx.fillRect(0, 0, width, height);
+  requestAnimationFrame(frame);
+
+  // ---- buttons ----
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    particles.length = 0;
+    ctx.fillStyle = '#07080c';
+    ctx.fillRect(0, 0, width, height);
+  });
+
+  document.getElementById('saveBtn').addEventListener('click', () => {
+    const link = document.createElement('a');
+    link.download = `ink-drift-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  });
+
+  const panel = document.getElementById('panel');
+  const toggleBtn = document.getElementById('toggleBtn');
+  document.getElementById('hideBtn').addEventListener('click', () => {
+    panel.classList.add('collapsed');
+    toggleBtn.classList.add('show');
+  });
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.remove('collapsed');
+    toggleBtn.classList.remove('show');
+  });
+
+  setTimeout(hideHint, 6000);
+})();
+</script>
+</body>
+</html>
